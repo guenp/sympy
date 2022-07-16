@@ -6,9 +6,16 @@ from sympy.core.add import Add
 from sympy.core.mul import Mul
 from sympy.core.numbers import Integer
 from sympy.core.power import Pow
+from sympy.integrals.integrals import Integral
+from sympy.concrete.summations import Sum
+
 from sympy.physics.quantum import Operator, Commutator, AntiCommutator
+from sympy.physics.quantum.pauli import SigmaOpBase
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.fermion import FermionOp
+from sympy.physics.quantum.operator import OperatorFunction
+from sympy.physics.quantum.expectation import Expectation
+
 
 __all__ = [
     'normal_order',
@@ -52,7 +59,47 @@ def _normal_ordered_form_factor(product, independent=False, recursive_limit=10,
     n = 0
     while n < len(factors) - 1:
 
-        if isinstance(factors[n], BosonOp):
+        if (isinstance(factors[n], OperatorFunction) and 
+                isinstance(factors[n].operator, BosonOp)):
+            # boson
+            if (not isinstance(factors[n + 1], OperatorFunction) or
+                    (isinstance(factors[n + 1], OperatorFunction) and 
+                not isinstance(factors[n + 1].operator, BosonOp))):
+                new_factors.append(factors[n])
+
+            elif factors[n].operator.is_annihilation == factors[n + 1].operator.is_annihilation:
+                if (independent and
+                        str(factors[n].operator.name) > str(factors[n + 1].operator.name)):
+                    new_factors.append(factors[n + 1])
+                    new_factors.append(factors[n])
+                    n += 1
+                else:
+                    new_factors.append(factors[n])
+
+            elif not factors[n].operator.is_annihilation:
+                new_factors.append(factors[n])
+
+            else:
+                if factors[n + 1].operator.is_annihilation:
+                    new_factors.append(factors[n])
+                else:
+                    if factors[n].operator.args[0] != factors[n + 1].operator.args[0]:
+                        if independent:
+                            c = 0
+                        else:
+                            c = Commutator(factors[n], factors[n + 1])
+                        new_factors.append(factors[n + 1] * factors[n] + c)
+                    else:
+                        c = Commutator(factors[n], factors[n + 1])
+                        new_factors.append(
+                            factors[n + 1] * factors[n] + c.doit())
+                    n += 1
+
+        elif isinstance(factors[n], Expectation):
+            factor = Expectation(normal_ordered_form(factors[n].args[0]), factors[n].is_normal_order)
+            new_factors.append(factor)
+        
+        elif isinstance(factors[n], BosonOp):
             # boson
             if not isinstance(factors[n + 1], BosonOp):
                 new_factors.append(factors[n])
@@ -118,22 +165,62 @@ def _normal_ordered_form_factor(product, independent=False, recursive_limit=10,
                             -factors[n + 1] * factors[n] + c.doit())
                     n += 1
 
-        elif isinstance(factors[n], Operator):
+        elif isinstance(factors[n], SigmaOpBase):
 
-            if isinstance(factors[n + 1], (BosonOp, FermionOp)):
+            if isinstance(factors[n + 1], BosonOp):
+                new_factors.append(factors[n + 1])
+                new_factors.append(factors[n])
+                n += 1
+            elif (isinstance(factors[n + 1], OperatorFunction) and
+                  isinstance(factors[n + 1].operator, BosonOp)):
                 new_factors.append(factors[n + 1])
                 new_factors.append(factors[n])
                 n += 1
             else:
                 new_factors.append(factors[n])
 
+        elif isinstance(factors[n], Operator):
+            if isinstance(factors[n], (BosonOp, FermionOp)):
+                if isinstance(factors[n + 1], (BosonOp, FermionOp)):
+                    new_factors.append(factors[n + 1])
+                    new_factors.append(factors[n])
+                    n += 1
+                elif (isinstance(factors[n + 1], OperatorFunction) and
+                      isinstance(factors[n + 1].operator, (BosonOp, FermionOp))):
+                    new_factors.append(factors[n + 1])
+                    new_factors.append(factors[n])
+                    n += 1
+            else:
+                new_factors.append(factors[n])
+
+        elif isinstance(factors[n], OperatorFunction):
+
+            if isinstance(factors[n].operator, (BosonOp, FermionOp)):
+                if isinstance(factors[n + 1], (BosonOp, FermionOp)):
+                    new_factors.append(factors[n + 1])
+                    new_factors.append(factors[n])
+                    n += 1
+                elif (isinstance(factors[n + 1], OperatorFunction) and
+                      isinstance(factors[n + 1].operator, (BosonOp, FermionOp))):
+                    new_factors.append(factors[n + 1])
+                    new_factors.append(factors[n])
+                    n += 1
+            else:
+                new_factors.append(factors[n])
+
         else:
-            new_factors.append(factors[n])
+            new_factors.append(normal_ordered_form(factors[n],
+                                                   recursive_limit=recursive_limit,
+                                                   _recursive_depth=_recursive_depth + 1,
+                                                   independent=independent))
 
         n += 1
 
     if n == len(factors) - 1:
-        new_factors.append(factors[-1])
+        new_factors.append(normal_ordered_form(factors[-1],
+                                               recursive_limit=recursive_limit,
+                                               _recursive_depth=_recursive_depth + 1,
+                                               independent=independent))
 
     if new_factors == factors:
         return product
@@ -160,6 +247,9 @@ def _normal_ordered_form_terms(expr, independent=False, recursive_limit=10,
                 term, recursive_limit=recursive_limit,
                 _recursive_depth=_recursive_depth, independent=independent)
             new_terms.append(new_term)
+        elif isinstance(term, Expectation):
+            term = Expectation(normal_ordered_form(term.args[0]), term.is_normal_order)
+            new_terms.append(term)
         else:
             new_terms.append(term)
 
@@ -206,6 +296,20 @@ def normal_ordered_form(expr, independent=False, recursive_limit=10,
                                            recursive_limit=recursive_limit,
                                            _recursive_depth=_recursive_depth,
                                            independent=independent)
+
+    elif isinstance(expr, Expectation):
+        return Expectation(normal_ordered_form(expr.expression), 
+                           expr.is_normal_order)
+                           
+    elif isinstance(expr, (Sum, Integral)):
+        nargs = [normal_ordered_form(expr.function,
+                                     recursive_limit=recursive_limit,
+                                     _recursive_depth=_recursive_depth,
+                                     independent=independent)]
+        for lim in expr.limits:
+            nargs.append(lim)
+        return type(expr)(*nargs)
+
     else:
         return expr
 
@@ -223,7 +327,23 @@ def _normal_order_factor(product, recursive_limit=10, _recursive_depth=0):
     new_factors = []
     while n < len(factors) - 1:
 
-        if (isinstance(factors[n], BosonOp) and
+        if (isinstance(factors[n], OperatorFunction) and 
+                isinstance(factors[n].operator, BosonOp) and
+                factors[n].operator.is_annihilation):
+            # boson
+            if not isinstance(factors[n + 1].operator, BosonOp):
+                new_factors.append(factors[n])
+            else:
+                if factors[n + 1].is_annihilation:
+                    new_factors.append(factors[n])
+                else:
+                    if factors[n].operator.args[0] != factors[n + 1].operator.args[0]:
+                        new_factors.append(factors[n + 1] * factors[n])
+                    else:
+                        new_factors.append(factors[n + 1] * factors[n])
+                    n += 1
+        
+        elif (isinstance(factors[n], BosonOp) and
                 factors[n].is_annihilation):
             # boson
             if not isinstance(factors[n + 1], BosonOp):

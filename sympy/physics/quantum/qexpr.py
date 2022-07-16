@@ -317,6 +317,25 @@ class QExpr(Expr):
         return self._print_contents_latex(printer, *args)
 
     #-------------------------------------------------------------------------
+    # Methods from Basic and Expr
+    #-------------------------------------------------------------------------
+
+    def doit(self, **kw_args):
+        return self
+
+    def _eval_rewrite(self, rule, args, **hints):
+        # TODO: Make Basic.rewrite use hints in evaluating
+        # self.rule(*args, **hints), not having hints breaks spin state
+        # (un)coupling on rewrite
+        if hasattr(self, rule):
+            rewritten = getattr(self, rule)(*args, **hints)
+
+            if rewritten is not None:
+                return rewritten
+
+        return self
+
+    #-------------------------------------------------------------------------
     # Represent
     #-------------------------------------------------------------------------
 
